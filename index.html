@@ -4,6 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Seer Snake</title>
+<script
+  src="https://js.sentry-cdn.com/011d56fc8220c04660c8f386e8f84b5b.min.js"
+  crossorigin="anonymous"
+></script>
+<script>
+  /* the loader lazy-loads the SDK; pull it in now so logs work from the landing screen */
+  if (window.Sentry) {
+    Sentry.onLoad(function () { Sentry.init({ enableLogs: true }); });
+    Sentry.forceLoad();
+  }
+</script>
 <style>
   :root {
     --screen-bg: #1d1127;   /* Sentry dark purple */
@@ -236,6 +247,7 @@
   let snake, dir, nextDir, food, score, speed, running;
   let particles = [];
   let lastStep = 0, lastFrame = 0;
+  let runs = 0, runStart = 0;     // for the Sentry logs: which run, how long it lasted
 
   /* ---- persistent high score (localStorage, file:// safe) ---- */
   function loadBest() {
@@ -470,9 +482,11 @@
     dir = nextDir;
     const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
 
-    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
-        snake.some(s => s.x === head.x && s.y === head.y)) {
-      return gameOver();
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
+      return gameOver("wall");
+    }
+    if (snake.some(s => s.x === head.x && s.y === head.y)) {
+      return gameOver("self");
     }
 
     snake.unshift(head);
@@ -504,9 +518,15 @@
   }
 
   /* ---- landing screen: ask for a nickname before play ---- */
-  function renderLanding() {
+  function renderLanding(reason) {
     running = false;
     state = "landing";
+    sentryLog("Landing screen shown", {
+      reason: reason || "page_load",
+      returning_player: !!lastName,
+      best: best,
+      best_holder: bestName || null,
+    });
     msgEl.classList.remove("hidden");
     msgEl.innerHTML =
       '<div class="big">SEER<br>SNAKE</div>' +
@@ -526,6 +546,22 @@
     setTimeout(() => nick.focus(), 0);
   }
 
+  /* ---- Sentry logs: one line per beat of the session ---- */
+  function sentryLog(message, attrs) {
+    if (!window.Sentry || !Sentry.onLoad) return;
+    Sentry.onLoad(function () {
+      if (Sentry.logger) Sentry.logger.info(message, attrs);
+    });
+  }
+
+  /* tell Sentry who just sat down at the machine */
+  function logNickname(name) {
+    if (window.Sentry && Sentry.onLoad) {
+      Sentry.onLoad(function () { Sentry.setUser({ username: name }); });
+    }
+    sentryLog("Player entered nickname", { nickname: name, best: best });
+  }
+
   function tryStart(v) {
     const name = (v || "").trim();
     if (!name) {
@@ -539,23 +575,42 @@
     lastName = playerName;
     saveName(playerName);
     playerEl.textContent = playerName;
-    start();
+    logNickname(playerName);
+    start("nickname");
   }
 
-  function start() {
+  function start(origin) {
     reset();
     msgEl.classList.add("hidden");
     lastStep = 0;
     running = true;
     state = "playing";
+    runStart = performance.now();
+    runs += 1;
+    sentryLog("Game started", {
+      nickname: playerName,
+      origin: origin || "unknown",
+      run: runs,
+      best: best,
+    });
   }
 
-  function startAgain() { start(); }
+  function startAgain() { start("replay"); }
 
-  function gameOver() {
+  function gameOver(cause) {
     running = false;
     state = "over";
     let newBest = false;
+    sentryLog("Game over", {
+      nickname: playerName,
+      cause: cause || "unknown",
+      score: score,
+      previous_best: best,
+      new_best: score > best,
+      run: runs,
+      duration_ms: Math.round(performance.now() - runStart),
+      snake_length: snake.length,
+    });
     if (score > best) {
       best = score; saveBest(best);
       bestName = playerName; saveBestName(bestName);
@@ -572,7 +627,8 @@
       '<button id="again" class="play-btn">Play again ▶</button>' +
       '<button id="rename" class="link-btn">Change nickname</button>';
     document.getElementById("again").addEventListener("click", startAgain);
-    document.getElementById("rename").addEventListener("click", renderLanding);
+    document.getElementById("rename")
+      .addEventListener("click", () => renderLanding("change_nickname"));
   }
 
   function turn(x, y) {
