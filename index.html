@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Seer Snake</title>
+<style>
+  :root {
+    --screen-bg: #1d1127;   /* Sentry dark purple */
+    --seer: #8c5cff;        /* Sentry violet */
+    --seer-lt: #b89bff;
+    --bug: #ff45a8;         /* Sentry pink accent */
+    --ink: #d6c7ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: #0d1206;
+    font-family: "Courier New", monospace;
+    color: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: manipulation;
+  }
+  .device {
+    background: #1c2a12;
+    padding: 24px;
+    border-radius: 18px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6), inset 0 0 0 2px #2c3d1a;
+  }
+  .screen {
+    background: var(--screen-bg);
+    padding: 14px;
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 3px #0c0716, inset 0 0 30px rgba(0,0,0,0.5);
+  }
+  .hud {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-weight: bold;
+    letter-spacing: 1px;
+    padding: 2px 4px 8px;
+    text-transform: uppercase;
+    font-size: 13px;
+    color: var(--seer-lt);
+  }
+  .hud .stats { display: flex; gap: 14px; }
+  .hud .best { color: var(--seer-lt); opacity: 0.85; }
+  .hud .bug-count { color: var(--bug); }
+  canvas {
+    display: block;
+    background: var(--screen-bg);
+    border-radius: 2px;
+  }
+  .footer {
+    text-align: center;
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding-top: 8px;
+    opacity: 0.7;
+    text-transform: uppercase;
+    color: var(--seer-lt);
+  }
+  .overlay { position: relative; }
+  .msg {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-weight: bold;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    background: rgba(29, 17, 39, 0.85);
+    line-height: 1.6;
+    color: var(--ink);
+  }
+  .msg.hidden { display: none; }
+  .msg .big {
+    font-size: 24px;
+    color: var(--seer-lt);
+    text-shadow: 0 0 12px rgba(140,92,255,0.8);
+  }
+  .msg .newbest {
+    font-size: 12px;
+    color: var(--bug);
+    margin-top: 6px;
+    text-shadow: 0 0 10px rgba(255,69,168,0.8);
+  }
+  .msg .small { font-size: 12px; margin-top: 10px; color: var(--ink); }
+  .blink { animation: blink 1s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+</style>
+</head>
+<body>
+  <div class="device">
+    <div class="screen">
+      <div class="hud">
+        <span>Seer</span>
+        <span class="stats">
+          <span class="best">Best <span id="best">0</span></span>
+          <span>Bugs <span id="score" class="bug-count">0</span></span>
+        </span>
+      </div>
+      <div class="overlay">
+        <canvas id="game" width="320" height="320"></canvas>
+        <div id="msg" class="msg">
+          <div class="big">SEER</div>
+          <div class="small">AI Debugger</div>
+          <div class="small blink">Press any key<br>or tap to hunt bugs</div>
+        </div>
+      </div>
+      <div class="footer">Arrows / WASD &nbsp;·&nbsp; Swipe on mobile</div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const scoreEl = document.getElementById("score");
+  const bestEl = document.getElementById("best");
+  const msgEl = document.getElementById("msg");
+
+  const COLS = 20, ROWS = 20;
+  const CELL = canvas.width / COLS;   // 16px cells
+  const SEER = "#8c5cff", BUG = "#ff45a8";
+  const BG = "#1d1127";
+
+  let snake, dir, nextDir, food, score, speed, running;
+  let particles = [];
+  let lastStep = 0, lastFrame = 0;
+
+  /* ---- persistent high score (localStorage, file:// safe) ---- */
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("seer-best") || "0", 10) || 0; }
+    catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("seer-best", String(v)); } catch (e) {}
+  }
+  let best = loadBest();
+  bestEl.textContent = best;
+
+  /* ---- optional real Seer logo: drop seer-logo.svg/.png beside this file ---- */
+  const logoSources = ["seer-logo.svg", "seer-logo.png", "seer.svg", "seer.png"];
+  let logoIdx = 0, logoReady = false;
+  const logoImg = new Image();
+  logoImg.onload = () => { logoReady = true; };
+  logoImg.onerror = () => {
+    logoIdx++;
+    if (logoIdx < logoSources.length) logoImg.src = logoSources[logoIdx];
+  };
+  logoImg.src = logoSources[0];
+
+  function reset() {
+    snake = [{ x: 9, y: 10 }, { x: 8, y: 10 }, { x: 7, y: 10 }];
+    dir = { x: 1, y: 0 };
+    nextDir = { x: 1, y: 0 };
+    score = 0;
+    speed = 130;
+    particles = [];
+    scoreEl.textContent = "0";
+    placeFood();
+  }
+
+  function freeCell(p) {
+    return p.x >= 0 && p.x < COLS && p.y >= 0 && p.y < ROWS &&
+           !snake.some(s => s.x === p.x && s.y === p.y);
+  }
+
+  function placeFood() {
+    while (true) {
+      const p = { x: (Math.random() * COLS) | 0, y: (Math.random() * ROWS) | 0 };
+      if (freeCell(p)) { food = p; return; }
+    }
+  }
+
+  // Bugs occasionally skitter away — and panic-sprint when Seer closes in,
+  // but stay mostly catchable at point-blank range.
+  function maybeBugEscape() {
+    const head = snake[0];
+    const dist = Math.abs(head.x - food.x) + Math.abs(head.y - food.y);
+    let chance = 0.05 + Math.min(0.15, score * 0.008);
+    if (dist > 1 && dist <= 4) chance += 0.30;   // flee when Seer approaches
+    if (dist <= 1) chance = 0.05;                // usually catchable up close
+    if (Math.random() > chance) return;
+
+    const opts = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+      .map(d => ({ x: food.x + d[0], y: food.y + d[1] }))
+      .filter(freeCell);
+    if (!opts.length) return;
+    // run toward the cell that maximizes distance from Seer's head
+    opts.sort((a, b) =>
+      (Math.abs(b.x - head.x) + Math.abs(b.y - head.y)) -
+      (Math.abs(a.x - head.x) + Math.abs(a.y - head.y)));
+    food = opts[0];
+  }
+
+  /* ---- particles: pink "bug squashed" pop ---- */
+  function spawnPop(gx, gy) {
+    const cx = gx * CELL + CELL / 2, cy = gy * CELL + CELL / 2;
+    for (let i = 0; i < 12; i++) {
+      const a = (Math.PI * 2 * i) / 12 + Math.random() * 0.5;
+      const sp = 0.6 + Math.random() * 1.6;
+      particles.push({
+        x: cx, y: cy,
+        vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 0.4,
+        life: 1, size: 1.5 + Math.random() * 2,
+      });
+    }
+  }
+
+  function updateParticles(dt) {
+    const f = dt / 16;
+    for (const p of particles) {
+      p.x += p.vx * f;
+      p.y += p.vy * f;
+      p.vy += 0.06 * f;          // gravity
+      p.life -= 0.045 * f;
+    }
+    particles = particles.filter(p => p.life > 0);
+  }
+
+  /* ---- drawing ---- */
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function drawBug(gx, gy, pulse) {
+    const cx = gx * CELL + CELL / 2, cy = gy * CELL + CELL / 2;
+    const r = CELL * 0.30 * pulse;
+    ctx.save();
+    ctx.strokeStyle = BUG; ctx.fillStyle = BUG;
+    ctx.lineWidth = 1.4; ctx.lineCap = "round";
+    for (const s of [-1, 1]) {
+      for (const off of [-0.5, 0, 0.5]) {
+        ctx.beginPath();
+        ctx.moveTo(cx, cy + off * r);
+        ctx.lineTo(cx + s * r * 1.7, cy + off * r * 1.9);
+        ctx.stroke();
+      }
+    }
+    ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx - r * 0.8, cy - r * 1.9); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx + r * 0.8, cy - r * 1.9); ctx.stroke();
+    ctx.shadowColor = BUG; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.ellipse(cx, cy, r, r * 1.15, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  // Seer's all-seeing eye — pale-green sclera, pupil tracks the direction of travel
+  function drawEyeMark(ex, ey) {
+    const R = CELL * 0.26;
+    ctx.fillStyle = "#e9f0a8";                         // pale-green sclera
+    ctx.beginPath(); ctx.arc(ex, ey, R, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#1c1140"; ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.arc(ex, ey, R, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "#241a4d";                         // iris, looks where Seer heads
+    ctx.beginPath();
+    ctx.arc(ex + dir.x * CELL * 0.10, ey + dir.y * CELL * 0.10, R * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.95)";          // catchlight
+    ctx.beginPath();
+    ctx.arc(ex + dir.x * CELL * 0.10 - 1.3, ey + dir.y * CELL * 0.10 - 1.3, 1.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Fallback pyramid head (used when no logo asset is present)
+  function drawTriangleHead(x, y) {
+    const cx = x + CELL / 2;
+    const apexY = y + 1.2, baseY = y + CELL - 1.2;
+    const leftX = x + 1.2, rightX = x + CELL - 1.2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(cx, apexY);
+    ctx.lineTo(rightX, baseY);
+    ctx.lineTo(leftX, baseY);
+    ctx.closePath();
+    ctx.shadowColor = SEER; ctx.shadowBlur = 14;
+    const g = ctx.createLinearGradient(0, apexY, 0, baseY);
+    g.addColorStop(0, SEER);
+    g.addColorStop(1, "#6a3fd6");
+    ctx.fillStyle = g;
+    ctx.lineJoin = "round"; ctx.lineWidth = 1.3; ctx.strokeStyle = "#b89bff";
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+    // eye sits low-center, where Seer's eye lives in the pyramid
+    drawEyeMark(cx, y + CELL * 0.58);
+  }
+
+  function drawHead(gx, gy) {
+    const x = gx * CELL, y = gy * CELL;
+    if (logoReady) {
+      // the SVG is already an upright pyramid + eye — draw it directly, no backing shape
+      ctx.save();
+      ctx.shadowColor = SEER; ctx.shadowBlur = 12;
+      const pad = 0.4;
+      ctx.drawImage(logoImg, x + pad, y + pad, CELL - pad * 2, CELL - pad * 2);
+      ctx.restore();
+    } else {
+      drawTriangleHead(x, y);
+    }
+  }
+
+  function drawBody(gx, gy, t) {
+    const x = gx * CELL, y = gy * CELL;
+    ctx.save();
+    ctx.globalAlpha = 0.55 + 0.45 * t;
+    ctx.shadowColor = SEER; ctx.shadowBlur = 6;
+    const grad = ctx.createLinearGradient(x, y, x + CELL, y + CELL);
+    grad.addColorStop(0, SEER);
+    grad.addColorStop(1, "#6a3fd6");
+    ctx.fillStyle = grad;
+    roundRect(x + 1.5, y + 1.5, CELL - 3, CELL - 3, 4);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    ctx.save();
+    ctx.shadowColor = BUG; ctx.shadowBlur = 6;
+    for (const p of particles) {
+      ctx.globalAlpha = Math.max(0, p.life);
+      ctx.fillStyle = BUG;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.restore();
+  }
+
+  function draw(now) {
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const pulse = 0.85 + 0.15 * Math.sin(now * 0.005);
+    drawBug(food.x, food.y, pulse);
+
+    for (let i = snake.length - 1; i >= 1; i--) {
+      drawBody(snake[i].x, snake[i].y, 1 - i / snake.length);
+    }
+    drawHead(snake[0].x, snake[0].y);
+    drawParticles();
+  }
+
+  function step() {
+    dir = nextDir;
+    const head = { x: snake[0].x + dir.x, y: snake[0].y + dir.y };
+
+    if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS ||
+        snake.some(s => s.x === head.x && s.y === head.y)) {
+      return gameOver();
+    }
+
+    snake.unshift(head);
+
+    if (head.x === food.x && head.y === food.y) {
+      score += 1;
+      scoreEl.textContent = score;
+      spawnPop(food.x, food.y);
+      if (speed > 60 && score % 4 === 0) speed -= 6;
+      placeFood();
+    } else {
+      snake.pop();
+      maybeBugEscape();
+    }
+  }
+
+  /* ---- single requestAnimationFrame loop drives logic + smooth FX ---- */
+  function loop(now) {
+    const dt = lastFrame ? now - lastFrame : 16;
+    lastFrame = now;
+
+    if (running && now - lastStep >= speed) {
+      lastStep = now;
+      step();
+    }
+    updateParticles(dt);
+    draw(now);
+    requestAnimationFrame(loop);
+  }
+
+  function start() {
+    reset();
+    msgEl.classList.add("hidden");
+    lastStep = 0;
+    running = true;
+  }
+
+  function gameOver() {
+    running = false;
+    let newBest = false;
+    if (score > best) { best = score; saveBest(best); bestEl.textContent = best; newBest = true; }
+    msgEl.classList.remove("hidden");
+    msgEl.innerHTML =
+      '<div class="big">CRASHED</div>' +
+      (newBest ? '<div class="newbest">★ New best ★</div>' : '') +
+      '<div class="small">' + score + ' bugs fixed &nbsp;·&nbsp; best ' + best + '</div>' +
+      '<div class="small blink">Press any key<br>or tap to retry</div>';
+  }
+
+  function turn(x, y) {
+    if (dir.x === -x && dir.y === -y) return;
+    nextDir = { x, y };
+  }
+
+  const keymap = {
+    ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0],
+    w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0],
+    W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0],
+  };
+
+  document.addEventListener("keydown", (e) => {
+    if (!running) { start(); e.preventDefault(); return; }
+    const m = keymap[e.key];
+    if (m) { turn(m[0], m[1]); e.preventDefault(); }
+  });
+
+  let tx = 0, ty = 0;
+  canvas.parentElement.addEventListener("touchstart", (e) => {
+    const t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY;
+    if (!running) start();
+  }, { passive: true });
+  canvas.parentElement.addEventListener("touchend", (e) => {
+    const t = e.changedTouches[0];
+    const dx = t.clientX - tx, dy = t.clientY - ty;
+    if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
+    if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : -1, 0);
+    else turn(0, dy > 0 ? 1 : -1);
+  }, { passive: true });
+
+  msgEl.addEventListener("click", () => { if (!running) start(); });
+
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
