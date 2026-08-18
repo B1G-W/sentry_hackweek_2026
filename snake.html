@@ -24,7 +24,9 @@
     -webkit-user-select: none;
     user-select: none;
     touch-action: manipulation;
+    overscroll-behavior: none;          /* no pull-to-refresh / bounce */
   }
+  .overlay { touch-action: none; }      /* swipes drive the snake, not the page */
   .device {
     background: #1c2a12;
     padding: 24px;
@@ -175,6 +177,7 @@
       flex-direction: column;
       justify-content: center;
     }
+    html, body { overflow: hidden; }     /* lock the page; only the snake moves */
     .screen {
       width: 100%;
       padding: 10px;
@@ -594,18 +597,24 @@
   });
 
   let tx = 0, ty = 0;
-  canvas.parentElement.addEventListener("touchstart", (e) => {
+  const play = canvas.parentElement;
+  play.addEventListener("touchstart", (e) => {
     if (state !== "playing") return;
+    e.preventDefault();                     // stop the page from scrolling/bouncing
     const t = e.changedTouches[0]; tx = t.clientX; ty = t.clientY;
-  }, { passive: true });
-  canvas.parentElement.addEventListener("touchend", (e) => {
+  }, { passive: false });
+  play.addEventListener("touchmove", (e) => {
+    if (state === "playing") e.preventDefault();
+  }, { passive: false });
+  play.addEventListener("touchend", (e) => {
     if (state !== "playing") return;
+    e.preventDefault();
     const t = e.changedTouches[0];
     const dx = t.clientX - tx, dy = t.clientY - ty;
     if (Math.abs(dx) < 20 && Math.abs(dy) < 20) return;
     if (Math.abs(dx) > Math.abs(dy)) turn(dx > 0 ? 1 : -1, 0);
     else turn(0, dy > 0 ? 1 : -1);
-  }, { passive: true });
+  }, { passive: false });
 
   reset();
   renderLanding();
