@@ -166,8 +166,9 @@
     body { align-items: stretch; justify-content: stretch; }
     .device {
       width: 100vw;
+      min-height: 100vh;
       min-height: 100dvh;
-      padding: 14px;
+      padding: 10px;
       border-radius: 0;
       box-shadow: none;
       display: flex;
@@ -176,16 +177,18 @@
     }
     .screen {
       width: 100%;
-      padding: 12px;
+      padding: 10px;
     }
     .hud { font-size: 16px; padding-bottom: 12px; }
-    /* square play area, as large as fits within width and leaving room
-       for the HUD + footer + padding vertically */
+    /* square play area that fills the container width (so it lines up flush
+       with the HUD/footer), capped by available height for tall/short screens */
     .overlay {
-      width: min(92vw, 74vh);
+      width: 100%;
+      max-width: calc(100dvh - 140px);
+      aspect-ratio: 1 / 1;
       margin: 0 auto;
     }
-    canvas { width: 100%; height: auto; }
+    canvas { display: block; width: 100%; height: 100%; }
     .footer { font-size: 13px; padding-top: 12px; }
     .msg .big { font-size: 8vw; }
     .msg .small, .nick-label { font-size: 3.6vw; }
